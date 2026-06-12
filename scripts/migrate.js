@@ -81,6 +81,9 @@ const migrations = [
     status           VARCHAR(50) DEFAULT 'open' CHECK (status IN ('open','investigating','resolved')),
     created_at       TIMESTAMP DEFAULT NOW()
   )`
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(100)`,
+  `ALTER TABLE users ALTER COLUMN username DROP NOT NULL`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS refresh_token TEXT`,
 ];
 
 async function runMigrations() {
