@@ -26,6 +26,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 
+app.use('/qrcodes', require('express').static(require('path').join(__dirname, '..', 'qrcodes')));
 app.get('/health', (req, res) => res.json({ status: 'ok', app: 'MediTrace API' }));
 
 app.use('/api/auth', authRoutes);
