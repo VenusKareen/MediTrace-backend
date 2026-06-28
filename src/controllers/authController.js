@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const pool   = require('../config/database');
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+//Helpers
 
 const signAccessToken = (user) =>
   jwt.sign(
@@ -19,7 +19,7 @@ const signRefreshToken = (user) =>
     { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d' }
   );
 
-// ─── Register ─────────────────────────────────────────────────────────────────
+//Register
 
 exports.register = async (req, res) => {
   const { username, email, password, role, license_number, facility_name } = req.body;
@@ -76,7 +76,7 @@ exports.register = async (req, res) => {
   }
 };
 
-// ─── Login ────────────────────────────────────────────────────────────────────
+//Login 
 
 exports.login = async (req, res) => {
   const { email, password } = req.body;
@@ -127,7 +127,7 @@ exports.login = async (req, res) => {
   }
 };
 
-// ─── Refresh Token ────────────────────────────────────────────────────────────
+//Refresh Token
 
 exports.refreshToken = async (req, res) => {
   const { refreshToken } = req.body;
@@ -160,7 +160,7 @@ exports.refreshToken = async (req, res) => {
   }
 };
 
-// ─── Logout ───────────────────────────────────────────────────────────────────
+//Logout 
 
 exports.logout = async (req, res) => {
   const { refreshToken } = req.body;
@@ -177,7 +177,7 @@ exports.logout = async (req, res) => {
   return res.json({ success: true, message: 'Logged out successfully.' });
 };
 
-// ─── Get current user ─────────────────────────────────────────────────────────
+//Get current user
 
 exports.getMe = async (req, res) => {
   try {
@@ -206,6 +206,105 @@ exports.getMe = async (req, res) => {
     });
   } catch (err) {
     console.error('getMe error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+// ── OTP Verify ────────────────────────────────────────────────────────────────
+exports.verifyOtp = async (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || !otp)
+    return res.status(400).json({ success: false, message: 'Email and OTP required.' });
+
+  try {
+    const result = await pool.query(
+      `SELECT user_id, otp_code, otp_expires_at FROM users WHERE email=$1`, [email]
+    );
+    const user = result.rows[0];
+    if (!user)
+      return res.status(404).json({ success: false, message: 'User not found.' });
+
+    if (!user.otp_code || user.otp_code !== otp)
+      return res.status(400).json({ success: false, message: 'Invalid OTP.' });
+
+    if (new Date() > new Date(user.otp_expires_at))
+      return res.status(400).json({ success: false, message: 'OTP has expired.' });
+
+    await pool.query(
+      `UPDATE users SET is_email_verified=true, otp_code=NULL, otp_expires_at=NULL WHERE user_id=$1`,
+      [user.user_id]
+    );
+
+    return res.json({ success: true, message: 'Email verified successfully.' });
+  } catch (err) {
+    console.error('verifyOtp error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ── Forgot Password ───────────────────────────────────────────────────────────
+exports.forgotPassword = async (req, res) => {
+  const { email } = req.body;
+  if (!email)
+    return res.status(400).json({ success: false, message: 'Email required.' });
+
+  try {
+    const result = await pool.query(`SELECT user_id FROM users WHERE email=$1`, [email]);
+    const user = result.rows[0];
+
+    // Always return success to prevent email enumeration
+    if (!user)
+      return res.json({ success: true, message: 'If that email exists, a reset OTP has been sent.' });
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+    await pool.query(
+      `UPDATE users SET otp_code=$1, otp_expires_at=$2 WHERE user_id=$3`,
+      [otp, expires, user.user_id]
+    );
+
+    // TODO: Send OTP via email/SMS. For now log it.
+    console.log(`[MediTrace] Password reset OTP for ${email}: ${otp}`);
+
+    return res.json({ success: true, message: 'If that email exists, a reset OTP has been sent.', debug_otp: process.env.NODE_ENV === 'development' ? otp : undefined });
+  } catch (err) {
+    console.error('forgotPassword error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ── Reset Password ────────────────────────────────────────────────────────────
+exports.resetPassword = async (req, res) => {
+  const { email, otp, new_password } = req.body;
+  if (!email || !otp || !new_password)
+    return res.status(400).json({ success: false, message: 'Email, OTP, and new password required.' });
+
+  if (new_password.length < 8)
+    return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
+
+  try {
+    const result = await pool.query(
+      `SELECT user_id, otp_code, otp_expires_at FROM users WHERE email=$1`, [email]
+    );
+    const user = result.rows[0];
+    if (!user)
+      return res.status(404).json({ success: false, message: 'User not found.' });
+
+    if (!user.otp_code || user.otp_code !== otp)
+      return res.status(400).json({ success: false, message: 'Invalid OTP.' });
+
+    if (new Date() > new Date(user.otp_expires_at))
+      return res.status(400).json({ success: false, message: 'OTP has expired. Request a new one.' });
+
+    const hash = await bcrypt.hash(new_password, 12);
+    await pool.query(
+      `UPDATE users SET password_hash=$1, otp_code=NULL, otp_expires_at=NULL, refresh_token=NULL WHERE user_id=$2`,
+      [hash, user.user_id]
+    );
+
+    return res.json({ success: true, message: 'Password reset successfully. Please log in.' });
+  } catch (err) {
+    console.error('resetPassword error:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 };
